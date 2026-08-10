@@ -1,0 +1,79 @@
+From: Codex <codex@openai.com>
+Date: Mon, 20 Jul 2026 17:45:00 +0200
+Subject: [PATCH] mx6ullevk: adapt minimal Iris bring-up
+
+Use USDHC1/MMC0 with the Iris card-detect GPIO, omit the unrelated SDIO
+controller and Ethernet probe, and boot Linux from mmcblk0p2.
+
+---
+ arch/arm/dts/imx6ull-14x14-evk-u-boot.dtsi | 22 ++++++++++++++++++++++
+ configs/mx6ull_14x14_evk_defconfig          |  3 +--
+ include/configs/mx6ullevk.h                 |  2 +-
+ 3 files changed, 24 insertions(+), 3 deletions(-)
+
+diff --git a/arch/arm/dts/imx6ull-14x14-evk-u-boot.dtsi b/arch/arm/dts/imx6ull-14x14-evk-u-boot.dtsi
+index 64ef97cb1a..195b9f0c11 100644
+--- a/arch/arm/dts/imx6ull-14x14-evk-u-boot.dtsi
++++ b/arch/arm/dts/imx6ull-14x14-evk-u-boot.dtsi
+@@ -10,3 +10,25 @@
+ &rngb {
+ 	bootph-all;
+ };
++
++&pinctrl_usdhc1 {
++	fsl,pins = <
++		MX6UL_PAD_SD1_CMD__USDHC1_CMD		0x17059
++		MX6UL_PAD_SD1_CLK__USDHC1_CLK		0x10059
++		MX6UL_PAD_SD1_DATA0__USDHC1_DATA0	0x17059
++		MX6UL_PAD_SD1_DATA1__USDHC1_DATA1	0x17059
++		MX6UL_PAD_SD1_DATA2__USDHC1_DATA2	0x17059
++		MX6UL_PAD_SD1_DATA3__USDHC1_DATA3	0x17059
++		MX6UL_PAD_ENET1_RX_DATA1__GPIO2_IO01	0x10000
++	>;
++};
++
++&usdhc1 {
++	/delete-property/ vmmc-supply;
++	cd-gpios = <&gpio2 1 GPIO_ACTIVE_LOW>;
++	no-1-8-v;
++};
++
++&usdhc2 {
++	status = "disabled";
++};
+diff --git a/configs/mx6ull_14x14_evk_defconfig b/configs/mx6ull_14x14_evk_defconfig
+index a9257e9882..715f9edcdc 100644
+--- a/configs/mx6ull_14x14_evk_defconfig
++++ b/configs/mx6ull_14x14_evk_defconfig
+@@ -37,7 +37,7 @@
+ CONFIG_ENV_OVERWRITE=y
+ CONFIG_ENV_IS_IN_MMC=y
+ CONFIG_ENV_RELOC_GD_ENV_ADDR=y
+-CONFIG_ENV_MMC_DEVICE_INDEX=1
++CONFIG_ENV_MMC_DEVICE_INDEX=0
+ CONFIG_ENV_VARS_UBOOT_RUNTIME_CONFIG=y
+ CONFIG_USE_ETHPRIME=y
+ CONFIG_ETHPRIME="eth1"
+@@ -54,7 +54,6 @@
+ CONFIG_PHY_MICREL=y
+ CONFIG_PHY_MICREL_KSZ8XXX=y
+ CONFIG_DM_ETH_PHY=y
+-CONFIG_FEC_MXC=y
+ CONFIG_MII=y
+ CONFIG_PINCTRL=y
+ CONFIG_PINCTRL_IMX6=y
+diff --git a/include/configs/mx6ullevk.h b/include/configs/mx6ullevk.h
+index 461ba5c907..8e4802937f 100644
+--- a/include/configs/mx6ullevk.h
++++ b/include/configs/mx6ullevk.h
+@@ -36,7 +36,7 @@
+ 	"videomode=video=ctfb:x:480,y:272,depth:24,pclk:108695,le:8,ri:4,up:2,lo:4,hs:41,vs:10,sync:0,vmode:0\0" \
+ 	"mmcdev="__stringify(CONFIG_ENV_MMC_DEVICE_INDEX)"\0" \
+ 	"mmcpart=1\0" \
+-	"mmcroot=/dev/mmcblk1p2 rootwait rw\0" \
++	"mmcroot=/dev/mmcblk0p2 rootwait rw\0" \
+ 	"mmcautodetect=yes\0" \
+ 	"mmcargs=setenv bootargs console=${console},${baudrate} " \
+ 		"root=${mmcroot}\0" \
+-- 
+2.43.0

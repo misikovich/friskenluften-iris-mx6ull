@@ -1,0 +1,25 @@
+From: Codex <codex@openai.com>
+Date: Tue, 21 Jul 2026 13:00:00 +0200
+Subject: [PATCH] mx6ullevk: unlock boot MTD for SD installer
+
+Remove the Linux boot-partition read-only flag only from the DT loaded
+by the SD recovery path. NAND boots retain the protection.
+
+---
+ include/configs/mx6ullevk.h | 2 ++
+ 1 file changed, 2 insertions(+)
+
+--- a/include/configs/mx6ullevk.h
++++ b/include/configs/mx6ullevk.h
+@@ -58,6 +58,8 @@
+ 		"run mmcargs; " \
+ 		"if test ${boot_fdt} = yes || test ${boot_fdt} = try; then " \
+ 			"if run loadfdt; then " \
++				"fdt addr ${fdt_addr}; " \
++				"fdt rm /soc/nand-controller@1806000/partitions/partition@0 read-only; " \
+ 				"bootz ${loadaddr} - ${fdt_addr}; " \
+ 			"else " \
+ 				"if test ${boot_fdt} = try; then " \
+-- 
+2.43.0
+

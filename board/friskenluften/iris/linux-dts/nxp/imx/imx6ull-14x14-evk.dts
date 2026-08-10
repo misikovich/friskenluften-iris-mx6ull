@@ -1,0 +1,227 @@
+// SPDX-License-Identifier: (GPL-2.0 OR MIT)
+
+/dts-v1/;
+
+#include "imx6ull.dtsi"
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+
+/ {
+	model = "Friskenluften Iris i.MX6ULL (minimal bring-up)";
+	compatible = "friskenluften,imx6ull-iris", "fsl,imx6ull";
+
+	aliases {
+		mmc0 = &usdhc1;
+		mmc1 = &usdhc2;
+		serial0 = &uart1;
+	};
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+	};
+
+	memory@80000000 {
+		device_type = "memory";
+		reg = <0x80000000 0x20000000>;
+	};
+
+	leds {
+		compatible = "pwm-leds";
+
+		debug {
+			label = "debug";
+			pwms = <&pwm1 0 1000000 0>;
+			max-brightness = <255>;
+			default-state = "off";
+		};
+	};
+
+	wifi_pwrseq: wifi-pwrseq {
+		compatible = "mmc-pwrseq-simple";
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_wifi_ctrl>;
+		reset-gpios = <&gpio1 7 GPIO_ACTIVE_LOW>;
+		clocks = <&wifi_lpo>;
+		clock-names = "ext_clock";
+	};
+
+	wifi_lpo: wifi-lpo-clock {
+		compatible = "pwm-clock";
+		#clock-cells = <0>;
+		pwms = <&pwm6 0 30517 0>;
+		clock-frequency = <32768>;
+	};
+};
+
+&iomuxc {
+	pinctrl_uart1: uart1grp {
+		fsl,pins = <
+			MX6UL_PAD_UART1_TX_DATA__UART1_DCE_TX	0xb0b1
+			MX6UL_PAD_UART1_RX_DATA__UART1_DCE_RX	0x1b081
+		>;
+	};
+
+	pinctrl_usdhc1: usdhc1grp {
+		fsl,pins = <
+			MX6UL_PAD_SD1_CMD__USDHC1_CMD		0x17059
+			MX6UL_PAD_SD1_CLK__USDHC1_CLK		0x10059
+			MX6UL_PAD_SD1_DATA0__USDHC1_DATA0	0x17059
+			MX6UL_PAD_SD1_DATA1__USDHC1_DATA1	0x17059
+			MX6UL_PAD_SD1_DATA2__USDHC1_DATA2	0x17059
+			MX6UL_PAD_SD1_DATA3__USDHC1_DATA3	0x17059
+			MX6UL_PAD_ENET1_RX_DATA1__GPIO2_IO01	0x10000
+		>;
+	};
+
+	pinctrl_usdhc2: usdhc2grp {
+		fsl,pins = <
+			MX6UL_PAD_CSI_VSYNC__USDHC2_CLK		0x48
+			MX6UL_PAD_CSI_HSYNC__USDHC2_CMD		0x17048
+			MX6UL_PAD_CSI_DATA00__USDHC2_DATA0	0x17048
+			MX6UL_PAD_CSI_DATA01__USDHC2_DATA1	0x17048
+			MX6UL_PAD_CSI_DATA02__USDHC2_DATA2	0x17048
+			MX6UL_PAD_CSI_DATA03__USDHC2_DATA3	0x17048
+		>;
+	};
+
+	pinctrl_wifi_ctrl: wifictrlgrp {
+		fsl,pins = <
+			MX6UL_PAD_GPIO1_IO06__GPIO1_IO06	0x1b001
+			MX6UL_PAD_GPIO1_IO07__GPIO1_IO07	0x10
+		>;
+	};
+
+	pinctrl_ecspi1: ecspi1grp {
+		fsl,pins = <
+			MX6UL_PAD_CSI_DATA04__ECSPI1_SCLK	0x59
+			MX6UL_PAD_CSI_DATA05__GPIO4_IO26	0x58
+			MX6UL_PAD_CSI_DATA06__ECSPI1_MOSI	0x59
+			MX6UL_PAD_CSI_DATA07__ECSPI1_MISO	0x10041
+			MX6UL_PAD_LCD_CLK__GPIO3_IO00		0x10041
+			MX6UL_PAD_LCD_ENABLE__GPIO3_IO01	0xb010
+		>;
+	};
+
+	pinctrl_gpmi_nand: gpminandgrp {
+		fsl,pins = <
+			MX6UL_PAD_NAND_CLE__RAWNAND_CLE		0xb0b1
+			MX6UL_PAD_NAND_ALE__RAWNAND_ALE		0xb0b1
+			MX6UL_PAD_NAND_WP_B__RAWNAND_WP_B	0xb0b1
+			MX6UL_PAD_NAND_READY_B__RAWNAND_READY_B	0xb000
+			MX6UL_PAD_NAND_CE0_B__RAWNAND_CE0_B	0xb0b1
+			MX6UL_PAD_NAND_RE_B__RAWNAND_RE_B	0xb0b1
+			MX6UL_PAD_NAND_WE_B__RAWNAND_WE_B	0xb0b1
+			MX6UL_PAD_NAND_DATA00__RAWNAND_DATA00	0xb0b1
+			MX6UL_PAD_NAND_DATA01__RAWNAND_DATA01	0xb0b1
+			MX6UL_PAD_NAND_DATA02__RAWNAND_DATA02	0xb0b1
+			MX6UL_PAD_NAND_DATA03__RAWNAND_DATA03	0xb0b1
+			MX6UL_PAD_NAND_DATA04__RAWNAND_DATA04	0xb0b1
+			MX6UL_PAD_NAND_DATA05__RAWNAND_DATA05	0xb0b1
+			MX6UL_PAD_NAND_DATA06__RAWNAND_DATA06	0xb0b1
+			MX6UL_PAD_NAND_DATA07__RAWNAND_DATA07	0xb0b1
+		>;
+	};
+
+	pinctrl_pwm1: pwm1grp {
+		fsl,pins = <
+			MX6UL_PAD_ENET1_RX_DATA0__PWM1_OUT	0x110b0
+		>;
+	};
+
+	pinctrl_pwm6: pwm6grp {
+		fsl,pins = <
+			MX6UL_PAD_JTAG_TDI__PWM6_OUT		0x3090
+		>;
+	};
+};
+
+&ecspi1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_ecspi1>;
+	cs-gpios = <&gpio4 26 GPIO_ACTIVE_LOW>;
+	status = "okay";
+
+	plc_grid: ethernet@0 {
+		compatible = "qca,qca7000";
+		reg = <0>;
+		interrupt-parent = <&gpio3>;
+		interrupts = <0 IRQ_TYPE_EDGE_RISING>;
+		spi-cpha;
+		spi-cpol;
+		spi-max-frequency = <8000000>;
+	};
+};
+
+&gpmi {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_gpmi_nand>;
+	status = "okay";
+
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		partition@0 {
+			label = "boot";
+			reg = <0x00000000 0x00400000>;
+			read-only;
+		};
+
+		partition@400000 {
+			label = "ubi";
+			reg = <0x00400000 0x1fc00000>;
+		};
+	};
+};
+
+&uart1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_uart1>;
+	status = "okay";
+};
+
+&pwm1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_pwm1>;
+	status = "okay";
+};
+
+&pwm6 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_pwm6>;
+	status = "okay";
+};
+
+&usdhc1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_usdhc1>;
+	bus-width = <4>;
+	cd-gpios = <&gpio2 1 GPIO_ACTIVE_LOW>;
+	no-1-8-v;
+	max-frequency = <50000000>;
+	status = "okay";
+};
+
+&usdhc2 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_usdhc2>;
+	bus-width = <4>;
+	no-1-8-v;
+	non-removable;
+	cap-power-off-card;
+	mmc-pwrseq = <&wifi_pwrseq>;
+	max-frequency = <25000000>;
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+
+	wifi@1 {
+		compatible = "brcm,bcm43430a1-fmac", "brcm,bcm4329-fmac";
+		reg = <1>;
+		brcm,board-type = "MUR1DX";
+		interrupt-parent = <&gpio1>;
+		interrupts = <6 IRQ_TYPE_LEVEL_LOW>;
+		interrupt-names = "host-wake";
+	};
+};

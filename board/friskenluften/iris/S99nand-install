@@ -1,0 +1,105 @@
+#!/bin/sh
+
+MNT=/run/iris-installer
+LED=/sys/class/leds/debug
+
+led_pattern()
+{
+	[ -w "$LED/trigger" ] || return 1
+	echo pattern > "$LED/trigger" || return 1
+	echo "$1" > "$LED/repeat" || return 1
+	echo "$2" > "$LED/pattern"
+}
+
+led_started()
+{
+	led_pattern -1 "0 300 255 200 255 300"
+}
+
+led_done()
+{
+	led_pattern 10 "255 50 255 0 0 50 0 0" || return 1
+	sleep 1
+	led_pattern -1 "0 1200 255 600 255 1200"
+}
+
+led_failed()
+{
+	led_pattern -1 "255 250 255 0 0 250 0 0" || true
+}
+
+led_programmed()
+{
+	led_pattern -1 "0 1200 255 600 255 1200"
+}
+
+fail()
+{
+	led_failed
+	echo "IRIS NAND INSTALL FAILED: $*" >&2
+	exit 1
+}
+
+cleanup()
+{
+	umount /run/iris-nand-check 2>/dev/null || true
+	ubidetach /dev/ubi_ctrl -m 1 2>/dev/null || true
+	umount "$MNT" 2>/dev/null || true
+}
+
+check_mtd()
+{
+	[ "$(cat /sys/class/mtd/mtd0/name)" = boot ] || fail "mtd0 is not boot"
+	[ "$(cat /sys/class/mtd/mtd0/size)" = 4194304 ] || fail "mtd0 size mismatch"
+	[ "$(cat /sys/class/mtd/mtd1/name)" = ubi ] || fail "mtd1 is not ubi"
+	[ "$(cat /sys/class/mtd/mtd1/size)" = 532676608 ] || fail "mtd1 size mismatch"
+	[ "$(cat /sys/class/mtd/mtd1/erasesize)" = 262144 ] || fail "erase size mismatch"
+	[ "$(cat /sys/class/mtd/mtd1/writesize)" = 4096 ] || fail "page size mismatch"
+	[ "$(cat /sys/class/mtd/mtd1/oobsize)" = 256 ] || fail "OOB size mismatch"
+	flags=$(cat /sys/class/mtd/mtd0/flags)
+	[ $((flags & 0x400)) -ne 0 ] || fail "mtd0 is read-only"
+}
+
+install_nand()
+{
+	if ! grep -qw 'root=/dev/mmcblk0p2' /proc/cmdline; then
+		led_programmed || true
+		return 0
+	fi
+
+	echo
+	echo "=== IRIS AUTOMATIC NAND INSTALL ==="
+	trap cleanup EXIT
+	led_started || fail "status LED unavailable"
+	mkdir -p "$MNT"
+	mount -t vfat -o ro /dev/mmcblk0p1 "$MNT" || fail "cannot mount payload"
+	(cd "$MNT" && sha256sum -c install.sha256) || fail "payload checksum"
+	grep -q 'Friskenluften Iris' /proc/device-tree/model || fail "wrong board"
+	check_mtd
+
+	cd /tmp || fail "cannot use /tmp"
+	kobs-ng init "$MNT/u-boot-dtb.imx" --search_exponent=1 -v -x || fail "U-Boot write"
+	ubiformat /dev/mtd1 -f "$MNT/rootfs.ubi" -y || fail "UBI write"
+	sync
+
+	ubiattach /dev/ubi_ctrl -m 1 || fail "UBI attach"
+	mkdir -p /run/iris-nand-check
+	mount -t ubifs ubi0:rootfs /run/iris-nand-check || fail "UBIFS mount"
+	[ -s /run/iris-nand-check/boot/zImage ] || fail "missing NAND kernel"
+	[ -s /run/iris-nand-check/boot/imx6ull-14x14-evk.dtb ] || fail "missing NAND DTB"
+	umount /run/iris-nand-check || fail "UBIFS unmount"
+	ubidetach /dev/ubi_ctrl -m 1 || fail "UBI detach"
+	umount "$MNT" || fail "payload unmount"
+	trap - EXIT
+	sync
+
+	echo "=== NAND INSTALL COMPLETE ==="
+	echo "Remove the uSD card, then reset the board when ready."
+	led_done || fail "done LED pattern"
+}
+
+case "$1" in
+	start) install_nand ;;
+	stop) ;;
+	*) echo "Usage: $0 {start|stop}"; exit 1 ;;
+esac

@@ -1,0 +1,51 @@
+From: Codex <codex@openai.com>
+Date: Tue, 21 Jul 2026 11:35:00 +0200
+Subject: [PATCH] mx6ullevk: enable UBI boot support
+
+Expose the boot and UBI NAND partitions and enable U-Boot's MTD,
+UBI and UBIFS commands. Keep the BootROM area read-only.
+
+---
+ arch/arm/dts/imx6ull-14x14-evk-u-boot.dtsi | 17 +++++++++++++++++
+ configs/mx6ull_14x14_evk_defconfig          |  2 ++
+ 2 files changed, 19 insertions(+)
+
+--- a/arch/arm/dts/imx6ull-14x14-evk-u-boot.dtsi
++++ b/arch/arm/dts/imx6ull-14x14-evk-u-boot.dtsi
+@@ -37,6 +37,23 @@
+ 	pinctrl-names = "default";
+ 	pinctrl-0 = <&pinctrl_gpmi_nand>;
+ 	status = "okay";
++
++	partitions {
++		compatible = "fixed-partitions";
++		#address-cells = <1>;
++		#size-cells = <1>;
++
++		partition@0 {
++			label = "boot";
++			reg = <0x00000000 0x00400000>;
++			read-only;
++		};
++
++		partition@400000 {
++			label = "ubi";
++			reg = <0x00400000 0x1fc00000>;
++		};
++	};
+ };
+ 
+ &pinctrl_usdhc1 {
+--- a/configs/mx6ull_14x14_evk_defconfig
++++ b/configs/mx6ull_14x14_evk_defconfig
+@@ -49,6 +49,8 @@
+ CONFIG_FSL_USDHC=y
+ CONFIG_MTD=y
+ CONFIG_CMD_NAND=y
++CONFIG_CMD_MTD=y
++CONFIG_CMD_UBI=y
+ CONFIG_DM_MTD=y
+ CONFIG_MTD_RAW_NAND=y
+ CONFIG_NAND_MXS=y
+-- 
+2.43.0

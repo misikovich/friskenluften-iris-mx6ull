@@ -1,0 +1,38 @@
+#!/bin/sh
+set -eu
+
+find_gpio3_base()
+{
+	for chip in /sys/class/gpio/gpiochip*; do
+		case "$(cat "$chip/label")" in
+			*20a4000*) cat "$chip/base"; return 0 ;;
+		esac
+	done
+	return 1
+}
+
+case "${1:-}" in
+	start|restart|reload)
+		base="$(find_gpio3_base)" || {
+			echo "Grid PLC reset failed: GPIO3 controller not found" >&2
+			exit 1
+		}
+		gpio=$((base + 1))
+		gpio_dir="/sys/class/gpio/gpio$gpio"
+		[ -d "$gpio_dir" ] || echo "$gpio" > /sys/class/gpio/export
+		[ -d "$gpio_dir" ] || {
+			echo "Grid PLC reset failed: GPIO3_IO01 unavailable" >&2
+			exit 1
+		}
+		echo low > "$gpio_dir/direction"
+		sleep 0.1
+		echo 1 > "$gpio_dir/value"
+		sleep 0.1
+		;;
+	stop)
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart|reload}" >&2
+		exit 1
+		;;
+esac

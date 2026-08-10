@@ -2,9 +2,9 @@
 
 ## Scope
 
-This workspace builds and documents a provisioning image for a custom i.MX6ULL board with removable microSD and raw SLC NAND. Make the smallest board-specific change that solves the requested problem.
+This repository builds and documents a provisioning image for a custom i.MX6ULL board with removable microSD and raw SLC NAND. Make the smallest board-specific change that solves the requested problem.
 
-This repository is a self-contained Buildroot fork for the custom i.MX6ULL board. `board/friskenluften/` and `configs/friskenluften_iris_defconfig` are project files; do not delete, reset, or overwrite them.
+This repository is a self-contained Buildroot fork for the custom i.MX6ULL board. `board/friskenluften/` and `configs/friskenluften_iris_defconfig` are project files; do not delete, reset, or overwrite them. The `upstream` remote tracks Buildroot (gitlab.com/buildroot.org) for future release rebases.
 
 ## Terminology and paths
 

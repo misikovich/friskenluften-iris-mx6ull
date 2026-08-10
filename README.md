@@ -1,6 +1,6 @@
 # i.MX6ULL NAND Provisioning Project
 
-This workspace builds a self-contained microSD provisioning image for a custom i.MX6ULL board. It supports first boot on a board with blank NAND, automatic installation of U-Boot and a Buildroot system into raw SLC NAND, subsequent NAND boot, visible programming status, and SDIO Wi-Fi bring-up.
+This repository builds a self-contained microSD provisioning image for a custom i.MX6ULL board. It supports first boot on a board with blank NAND, automatic installation of U-Boot and a Buildroot system into raw SLC NAND, subsequent NAND boot, visible programming status, and SDIO Wi-Fi bring-up.
 
 The image is intentionally board-specific. The installer writes raw flash and must not be used on hardware with a different NAND geometry or pinout.
 
@@ -10,7 +10,7 @@ The image is intentionally board-specific. The installer writes raw flash and mu
 - 512 MiB DDR3
 - 512 MiB (4 Gbit) SLC NAND
 - 2.4 GHz Wi-Fi/Bluetooth combo module on USDHC2
-- - Wi-Fi chipset compatible with `brcmfmac` BCM43430/CYW4343W support
+  - Wi-Fi chipset compatible with `brcmfmac` BCM43430/CYW4343W support
   - Bluetooth is currently disabled
 - Grid PLC using QCA7005 on ECSPI1
 - Debug console on UART1 at 115200 8N1
@@ -86,6 +86,13 @@ i.MX ROM → NAND boot structures → U-Boot → UBI/UBIFS → Linux → UBIFS r
 The NAND boot partition is read-only during normal NAND operation. U-Boot removes that protection only from the in-memory device tree used by the SD installer.
 
 ## Build
+
+Clone the repository (self-contained Buildroot tree, no submodules):
+
+```bash
+git clone git@github.com:misikovich/friskenluften-iris-mx6ull.git
+cd friskenluften-iris-mx6ull
+```
 
 From the repository root:
 

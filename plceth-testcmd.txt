@@ -1,0 +1,7 @@
+dmesg | grep -Ei 'qca|spi0\.0|ecspi'
+ethtool -i eth0
+ip -details -statistics link show eth0
+cat /proc/interrupts | grep -Ei 'qca|spi0\.0'
+ip addr show eth0
+ethtool -S eth0
+ping -c 4 GATEWAY_OR_PEER_IP

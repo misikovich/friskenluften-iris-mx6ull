@@ -20,7 +20,7 @@ The image is intentionally board-specific. The installer writes raw flash and mu
 ```text
 ├── README.md
 ├── AGENTS.md
-├── burn_autoinstall_fw_to sd.sh  Safely write the generated image to microSD
+├── burn-sd.sh                    Safely write the generated image to microSD
 ├── plceth-testcmd.txt            Grid PLC test command notes
 ├── hardware/                     Hardware and firmware reference archive
 ├── configs/friskenluften_iris_defconfig
@@ -136,7 +136,7 @@ lsblk -p -o NAME,SIZE,MODEL,TRAN,MOUNTPOINTS
 Replace `/dev/sdX` with the whole microSD device, not a partition:
 
 ```bash
-./"burn_autoinstall_fw_to sd.sh" /dev/sdX
+./burn-sd.sh /dev/sdX
 ```
 
 The script finds the freshly built `output/images/sdcard.img`, rejects

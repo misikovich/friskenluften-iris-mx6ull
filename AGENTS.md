@@ -72,6 +72,13 @@ The required LED states are:
 
 Run commands from the repository root.
 
+On a fresh checkout or after removing `.config`, configure the board before
+building:
+
+```bash
+make friskenluften_iris_defconfig
+```
+
 After configuration changes:
 
 ```bash

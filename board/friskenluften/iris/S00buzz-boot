@@ -1,0 +1,28 @@
+#!/bin/sh
+set -eu
+
+# Audible power-on cue, played from the first init script so it sounds as early
+# as userspace can reach the buzzer PWM.
+
+BUZZ=/usr/sbin/buzz
+BUZZ_VOLUME=20
+BUZZ_BOOT=600:100,0:50,600:100
+
+case "${1:-}" in
+	start|restart|reload)
+		[ -x "$BUZZ" ] || {
+			echo "Boot chime skipped: $BUZZ missing" >&2
+			exit 1
+		}
+		"$BUZZ" "$BUZZ_VOLUME" "$BUZZ_BOOT" || {
+			echo "Boot chime failed" >&2
+			exit 1
+		}
+		;;
+	stop)
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart|reload}" >&2
+		exit 1
+		;;
+esac

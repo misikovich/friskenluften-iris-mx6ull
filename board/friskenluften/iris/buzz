@@ -1,0 +1,116 @@
+#!/bin/sh
+set -eu
+
+# Buzzer tone player.
+#
+# The buzzer is driven by PWM3 (2088000.pwm) on GPIO1_IO04, exposed to
+# userspace through the standard Linux PWM sysfs interface. Tone pitch is the
+# PWM period, loudness is the PWM duty ratio: volume 100 means a 50 percent
+# duty cycle, which is the loudest square wave the pin can produce.
+
+PWM_DEVICE=2088000.pwm
+HZ_MIN=20
+HZ_MAX=20000
+MS_MAX=60000
+
+usage()
+{
+	cat >&2 <<EOF
+Usage: $0 VOLUME HZ:MS[,HZ:MS...]
+
+  VOLUME  loudness in percent, 0-100
+  HZ      tone frequency, $HZ_MIN-$HZ_MAX, or 0 for a rest
+  MS      tone duration in milliseconds, 1-$MS_MAX
+
+Example: $0 20 600:100,0:50,800:100
+EOF
+	exit 2
+}
+
+die()
+{
+	echo "$*" >&2
+	exit 1
+}
+
+is_number()
+{
+	case "$1" in
+		''|*[!0-9]*) return 1 ;;
+	esac
+	return 0
+}
+
+[ "$#" -eq 2 ] || usage
+
+volume="$1"
+sequence="$2"
+
+is_number "$volume" || usage
+[ "$volume" -le 100 ] || usage
+
+# Validate the whole sequence before touching the hardware, so a malformed
+# note never leaves a half-played melody behind.
+case "$sequence" in
+	''|,*|*,|*,,*) usage ;;
+esac
+old_ifs="$IFS"
+IFS=,
+for note in $sequence; do
+	case "$note" in
+		*:*) ;;
+		*) usage ;;
+	esac
+	hz="${note%%:*}"
+	ms="${note#*:}"
+	is_number "$hz" || usage
+	is_number "$ms" || usage
+	[ "$hz" -eq 0 ] || { [ "$hz" -ge "$HZ_MIN" ] && [ "$hz" -le "$HZ_MAX" ]; } || usage
+	[ "$ms" -ge 1 ] && [ "$ms" -le "$MS_MAX" ] || usage
+done
+IFS="$old_ifs"
+
+chip=
+for candidate in /sys/class/pwm/pwmchip*; do
+	[ -d "$candidate" ] || continue
+	case "$(readlink -f "$candidate")" in
+		*/"$PWM_DEVICE"/*) chip="$candidate" ;;
+	esac
+done
+[ -n "$chip" ] || die "Buzzer PWM ($PWM_DEVICE) not found; check the device tree."
+
+channel="$chip/pwm0"
+[ -d "$channel" ] || echo 0 > "$chip/export"
+[ -d "$channel" ] || die "Cannot export the buzzer PWM channel."
+
+silence()
+{
+	echo 0 > "$channel/duty_cycle" 2>/dev/null || :
+	echo 0 > "$channel/enable" 2>/dev/null || :
+}
+
+trap 'silence' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
+tone()
+{
+	if [ "$1" -eq 0 ] || [ "$volume" -eq 0 ]; then
+		silence
+	else
+		period=$((1000000000 / $1))
+		duty=$((period * volume / 200))
+		[ "$duty" -gt 0 ] || duty=1
+		echo 0 > "$channel/duty_cycle"
+		echo "$period" > "$channel/period"
+		echo "$duty" > "$channel/duty_cycle"
+		echo 1 > "$channel/enable"
+	fi
+	usleep $(($2 * 1000))
+}
+
+IFS=,
+for note in $sequence; do
+	tone "${note%%:*}" "${note#*:}"
+done
+IFS="$old_ifs"

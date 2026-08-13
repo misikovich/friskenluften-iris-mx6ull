@@ -14,6 +14,7 @@ The image is intentionally board-specific. The installer writes raw flash and mu
   - Bluetooth is currently disabled
 - Grid PLC using QCA7005 on ECSPI1
 - PN7150 NFC controller on I2C4
+- Buzzer on PWM3
 - Debug console on UART1 at 115200 8N1
 
 ## Repository layout
@@ -40,6 +41,8 @@ Important board files:
 - `board/friskenluften/iris/patches/uboot/`: U-Boot board, NAND, UBI, and boot-flow changes
 - `board/friskenluften/iris/linux.fragment`: additional kernel options
 - `board/friskenluften/iris/S99nand-install`: automatic NAND installer and LED status logic
+- `board/friskenluften/iris/buzz`: buzzer tone player installed as `/usr/sbin/buzz`
+- `board/friskenluften/iris/S00buzz-boot`: power-on buzzer cue, first init script
 - `board/friskenluften/iris/post-build.sh`: installs kernel, DTB, and init script into the target root filesystem
 - `board/friskenluften/iris/post-image.sh`: creates payload checksums and invokes `genimage`
 - `board/friskenluften/iris/genimage.cfg`: microSD layout
@@ -180,6 +183,48 @@ The installer uses the native Linux LED pattern trigger:
 | Normal programmed-board boot | Slow breathing with a 600 ms full-brightness plateau, approximately three seconds per cycle |
 
 The implementation is in `board/friskenluften/iris/S99nand-install`. Kernel support is enabled by `CONFIG_LEDS_TRIGGER_PATTERN`.
+
+## Buzzer
+
+The buzzer is driven by PWM3 (`2088000.pwm`) on `GPIO1_IO04`. No kernel
+consumer claims the channel, so it stays available through the standard Linux
+PWM sysfs interface. `buzz` plays a tone sequence:
+
+```sh
+buzz 20 600:100,0:50,800:100
+```
+
+The first argument is the loudness in percent, `0`-`100`. The sequence is a
+comma-separated list of `HZ:MS` notes, played in order: frequency in hertz,
+then duration in milliseconds. Frequency `0` is a rest. Accepted ranges are
+20-20000 Hz and 1-60000 ms; any malformed sequence is rejected before the
+hardware is touched.
+
+Pitch is the PWM period and loudness is the PWM duty ratio, so volume `100`
+means a 50 percent duty cycle, the loudest square wave the pin can produce.
+The command blocks for the length of the sequence and silences the buzzer on
+exit, including on interruption. The implementation is
+`board/friskenluften/iris/buzz`.
+
+Two cues are automatic:
+
+| Event                | Sequence                                | Played by                     |
+| -------------------- | --------------------------------------- | ----------------------------- |
+| Power-on             | `20 600:100,0:50,600:100`               | `/etc/init.d/S00buzz-boot`    |
+| NAND install complete| `20 600:100,0:50,900:100,0:50,1300:100` | `/etc/init.d/S99nand-install` |
+
+`S00buzz-boot` is the first script `rcS` runs, so the power-on cue sounds as
+early as userspace can reach the buzzer. It runs on every boot, from the
+provisioning card and from NAND. The completion cue sounds once the installer
+has verified the programmed NAND, immediately before the completion LED
+pattern; a failed install stays silent and only the failure LED state applies.
+
+Inspect or drive the channel manually:
+
+```sh
+readlink -f /sys/class/pwm/pwmchip*
+cat /sys/class/pwm/pwmchip*/pwm0/period /sys/class/pwm/pwmchip*/pwm0/duty_cycle
+```
 
 ## Wi-Fi
 

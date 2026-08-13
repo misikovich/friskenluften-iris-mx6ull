@@ -142,6 +142,12 @@
 		>;
 	};
 
+	pinctrl_pwm3: pwm3grp {
+		fsl,pins = <
+			MX6UL_PAD_GPIO1_IO04__PWM3_OUT		0x10
+		>;
+	};
+
 	pinctrl_pwm6: pwm6grp {
 		fsl,pins = <
 			MX6UL_PAD_JTAG_TDI__PWM6_OUT		0x3090
@@ -215,6 +221,13 @@
 &pwm1 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_pwm1>;
+	status = "okay";
+};
+
+/* Buzzer; tones are generated from userspace through the PWM sysfs interface. */
+&pwm3 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_pwm3>;
 	status = "okay";
 };
 

@@ -33,6 +33,8 @@ credentials, keys, MAC addresses, or unique device data to it.
 - WLAN reset/enable: `GPIO1_IO07`, active low through `mmc-pwrseq-simple`
 - WLAN low-power clock: PWM6 on `JTAG_TDI`, 32768 Hz
 - Debug LED: PWM1 on `ENET1_RX_DATA0`
+- Buzzer: PWM3 on `GPIO1_IO04`, ALT1, pad setting `0x10`, no kernel consumer;
+  tones come from userspace through the PWM sysfs interface
 - Grid PLC: QCA7005 using the upstream `qcaspi`/`qca,qca7000` interface on
   ECSPI1, mode 3 at 8 MHz
 - Grid PLC chip select: `GPIO4_IO26`, active low
@@ -70,6 +72,12 @@ The required LED states are:
 - complete: ten flashes in one second, then slow breathing
 - failure: toggle every 250 ms forever
 - programmed NAND boot: slow breathing
+
+The required buzzer cues, played through `buzz`, are:
+
+- power-on, every boot, first init script: `20 600:100,0:50,600:100`
+- install complete, before the completion LED pattern: `20 600:100,0:50,900:100,0:50,1300:100`
+- install failure: silent
 
 ## Build and validation
 

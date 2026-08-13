@@ -91,6 +91,20 @@
 		>;
 	};
 
+	pinctrl_i2c4: i2c4grp {
+		fsl,pins = <
+			MX6UL_PAD_ENET2_RX_EN__I2C4_SCL		0x40010849
+			MX6UL_PAD_ENET2_TX_DATA0__I2C4_SDA	0x40010849
+		>;
+	};
+
+	pinctrl_nfc: nfcgrp {
+		fsl,pins = <
+			MX6UL_PAD_ENET2_RX_DATA0__GPIO2_IO08	0x10041
+			MX6UL_PAD_ENET2_TX_CLK__GPIO2_IO14	0x3010
+		>;
+	};
+
 	pinctrl_ecspi1: ecspi1grp {
 		fsl,pins = <
 			MX6UL_PAD_CSI_DATA04__ECSPI1_SCLK	0x59
@@ -172,6 +186,23 @@
 			label = "ubi";
 			reg = <0x00400000 0x1fc00000>;
 		};
+	};
+};
+
+&i2c4 {
+	clock-frequency = <400000>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_i2c4>;
+	status = "okay";
+
+	nfc@29 {
+		compatible = "nxp,nxp-nci-i2c";
+		reg = <0x29>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_nfc>;
+		interrupt-parent = <&gpio2>;
+		interrupts = <8 IRQ_TYPE_EDGE_RISING>;
+		enable-gpios = <&gpio2 14 GPIO_ACTIVE_HIGH>;
 	};
 };
 

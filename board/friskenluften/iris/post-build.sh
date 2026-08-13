@@ -10,3 +10,5 @@ install -D -m 0755 board/friskenluften/iris/S09plc-grid-reset \
 	"${TARGET_DIR}/etc/init.d/S09plc-grid-reset"
 install -D -m 0755 board/friskenluften/iris/plc-grid-check \
 	"${TARGET_DIR}/usr/sbin/plc-grid-check"
+install -D -m 0755 board/friskenluften/iris/nfc-scan \
+	"${TARGET_DIR}/usr/sbin/nfc-scan"

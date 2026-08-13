@@ -13,6 +13,7 @@ The image is intentionally board-specific. The installer writes raw flash and mu
   - Wi-Fi chipset compatible with `brcmfmac` BCM43430/CYW4343W support
   - Bluetooth is currently disabled
 - Grid PLC using QCA7005 on ECSPI1
+- PN7150 NFC controller on I2C4
 - Debug console on UART1 at 115200 8N1
 
 ## Repository layout
@@ -216,6 +217,32 @@ Running `wpa_passphrase` with the password as an argument can leave it in shell 
 
 No Wi-Fi credentials are embedded in the build, and no automatic Wi-Fi
 connection service is enabled yet.
+
+## NFC
+
+The PN7150 NFC controller uses I2C4 at address `0x29`. Its interrupt is
+connected to `GPIO2_IO08`, and its active-high reset/enable input is connected
+to `GPIO2_IO14`. Linux uses the upstream `nxp_nci_i2c` driver and exposes the
+controller through the kernel NFC subsystem. `neard` provides tag and NDEF
+record discovery to userspace.
+
+Scan for one NFC tag, with a default 30-second timeout:
+
+```sh
+nfc-scan
+```
+
+Pass a different timeout in seconds when needed:
+
+```sh
+nfc-scan 60
+```
+
+The command verifies the I2C device, kernel driver, NFC adapter, and `neard`
+service before polling. It prints the detected tag path, UID, type, protocol,
+read-only state, and decoded NDEF record fields. On a terminal, logs scroll
+above a fixed status panel. Preview it without NFC hardware using
+`nfc-scan --tui-test`.
 
 ## Grid PLC
 

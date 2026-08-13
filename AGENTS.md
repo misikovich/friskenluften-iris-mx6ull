@@ -38,6 +38,9 @@ credentials, keys, MAC addresses, or unique device data to it.
 - Grid PLC chip select: `GPIO4_IO26`, active low
 - Grid PLC interrupt: `GPIO3_IO00`, rising edge
 - Grid PLC reset: `GPIO3_IO01`, active low; pulse before udev loads `qcaspi`
+- NFC: PN7150 on I2C4 at address `0x29`, 400 kHz
+- NFC interrupt: `GPIO2_IO08`, rising edge
+- NFC reset/enable: `GPIO2_IO14`, active high
 - EV PLC: ECSPI2, disabled until explicitly requested
 - Console: UART1, 115200 8N1
 - Bluetooth: disabled until explicitly requested

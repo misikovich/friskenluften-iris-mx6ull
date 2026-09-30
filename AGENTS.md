@@ -69,9 +69,9 @@ Never replace `kobs-ng` with a raw NAND write. Do not alter `--search_exponent=1
 The required LED states are:
 
 - programming: fast breathing
-- complete: ten flashes in one second, then slow breathing
+- complete: ten flashes in one second, then the idle pulse
 - failure: toggle every 250 ms forever
-- programmed NAND boot: slow breathing
+- programmed NAND boot: idle pulse (100 ms rise, 900 ms fade, once per second)
 
 The required buzzer cues, played through `buzz`, are:
 

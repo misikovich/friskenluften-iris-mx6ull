@@ -1,282 +1,505 @@
-#!/bin/sh
-set -eu
+#!/usr/bin/env python3
+"""Verify the Grid PLC path: ECSPI1 -> qcaspi -> QCA7005 -> remote station."""
 
-[ "$#" -le 1 ] || {
-	echo "Usage: $0 [peer-IP|--tui-test]" >&2
-	exit 2
-}
-case "${1:-}" in
-	--tui-test) ;;
-	-*) echo "Peer IP must not begin with '-'." >&2; exit 2 ;;
-esac
+import os
+import re
+import select
+import shutil
+import signal
+import subprocess
+import sys
+import termios
+import time
 
-spi=/sys/bus/spi/devices/spi0.0
-iface=
-tui=0
-current_step=spi
-s_spi=PENDING
-s_sync=PENDING
-s_identity=PENDING
-s_remote=PENDING
-s_rates=PENDING
-s_ipv4=PENDING
-s_peer=PENDING
+SPI_DEV = "/sys/bus/spi/devices/spi0.0"
+SYNC_TIMEOUT = 15
 
-if [ -t 1 ]; then
-	cyan="$(printf '\033[1;36m')"
-	green="$(printf '\033[1;32m')"
-	gray="$(printf '\033[2;37m')"
-	red="$(printf '\033[1;31m')"
-	reset="$(printf '\033[0m')"
-else
-	cyan=
-	green=
-	gray=
-	red=
-	reset=
-fi
+STEPS = [
+    ("spi", "SPI device and qcaspi driver"),
+    ("sync", "SPI synchronization"),
+    ("identity", "Local PLC identity"),
+    ("remote", "Remote PLC association"),
+    ("rates", "PLC PHY rates"),
+    ("ipv4", "IPv4 host discovery"),
+    ("peer", "Known peer ping"),
+]
 
-tui_status()
-{
-	case "$1" in
-		PASS) printf '%s[PASS]%s' "$green" "$reset" ;;
-		FAIL) printf '%s[FAIL]%s' "$red" "$reset" ;;
-		SKIP) printf '%s[SKIP]%s' "$cyan" "$reset" ;;
-		*)    printf '%s-----%s' "$gray" "$reset" ;;
-	esac
-}
-
-tui_line()
-{
-	printf '\033[%d;1H\033[2K| ' "$1"
-	tui_status "$2"
-	printf ' %-38s |' "$3"
+# qcaspi ethtool counters: what a nonzero value usually points at.
+COUNTER_HINTS = {
+    "Triggered resets": "driver reset the QCA7005 after losing SPI sync",
+    "Reset timeouts": "QCA7005 did not come back after a reset "
+                      "(power, reset line GPIO3_IO01, or firmware crash)",
+    "Read errors": "SPI read transfers failed on ECSPI1",
+    "Write errors": "SPI write transfers failed on ECSPI1",
+    "Read buffer errors": "QCA7005 reported a read buffer error "
+                          "(corrupted SPI data)",
+    "Write buffer errors": "QCA7005 reported a write buffer error "
+                           "(corrupted SPI data)",
+    "SPI errors": "QCA7005 flagged SPI protocol errors (signal integrity, "
+                  "wrong SPI mode, or clock too fast)",
+    "Write verify errors": "register write read-back mismatched "
+                           "(SPI signal integrity)",
+    "Buffer available errors": "QCA7005 reported an impossible buffer size "
+                               "(corrupted SPI reads)",
+    "Bad signature": "QCA7005 signature register read back wrong "
+                     "(MISO/MOSI/CLK/CS wiring, SPI mode, or chip not powered)",
 }
 
-tui_render()
-{
-	[ "$tui" -eq 1 ] || return 0
-	printf '\0337\033[%d;1H\033[2K%s+ Grid PLC verification ----------------------+%s' \
-		"$tui_top" "$cyan" "$reset"
-	tui_line "$((tui_top + 1))" "$s_spi"      "SPI device and qcaspi driver"
-	tui_line "$((tui_top + 2))" "$s_sync"     "SPI synchronization"
-	tui_line "$((tui_top + 3))" "$s_identity" "Local PLC identity"
-	tui_line "$((tui_top + 4))" "$s_remote"   "Remote PLC association"
-	tui_line "$((tui_top + 5))" "$s_rates"    "PLC PHY rates"
-	tui_line "$((tui_top + 6))" "$s_ipv4"     "IPv4 host discovery"
-	tui_line "$((tui_top + 7))" "$s_peer"     "Known peer ping"
-	printf '\033[%d;1H\033[2K+-----------------------------------------------+\0338' \
-		"$((tui_top + 8))"
-}
+if sys.stdout.isatty():
+    CYAN, GREEN, GRAY, RED, YELLOW, RESET = (
+        "\033[1;36m", "\033[1;32m", "\033[2;37m", "\033[1;31m",
+        "\033[1;33m", "\033[0m")
+else:
+    CYAN = GREEN = GRAY = RED = YELLOW = RESET = ""
 
-set_status()
-{
-	current_step="$1"
-	case "$1" in
-		spi)      s_spi="$2" ;;
-		sync)     s_sync="$2" ;;
-		identity) s_identity="$2" ;;
-		remote)   s_remote="$2" ;;
-		rates)    s_rates="$2" ;;
-		ipv4)     s_ipv4="$2" ;;
-		peer)     s_peer="$2" ;;
-	esac
-	tui_render
-}
 
-tui_stop()
-{
-	[ "$tui" -eq 1 ] || return 0
-	tui_render
-	printf '\033[r\033[%d;1H\n' "$tui_rows"
-	tui=0
-}
+class CheckFailed(Exception):
+    """A failed step with a plain-language explanation."""
 
-terminal_rows()
-{
-	case "${PLC_TUI_ROWS:-}" in
-		''|*[!0-9]*) ;;
-		*) [ "$PLC_TUI_ROWS" -gt 0 ] && {
-			printf '%s' "$PLC_TUI_ROWS"
-			return
-		} ;;
-	esac
+    def __init__(self, summary, meaning="", actions=(), raw=""):
+        super().__init__(summary)
+        self.summary = summary
+        self.meaning = meaning
+        self.actions = list(actions)
+        self.raw = raw
 
-	saved_stty="$(stty -g </dev/tty 2>/dev/null || true)"
-	if [ -n "$saved_stty" ] &&
-		stty -echo -icanon min 0 time 3 </dev/tty 2>/dev/null; then
-		trap 'stty "$saved_stty" </dev/tty 2>/dev/null; exit 129' HUP
-		trap 'stty "$saved_stty" </dev/tty 2>/dev/null; exit 130' INT
-		trap 'stty "$saved_stty" </dev/tty 2>/dev/null; exit 143' TERM
-		reply=
-		if printf '\0337\033[999;999H\033[6n' >/dev/tty; then
-			reply="$(dd if=/dev/tty bs=32 count=1 2>/dev/null || true)"
-		fi
-		printf '\0338' >/dev/tty || true
-		stty "$saved_stty" </dev/tty 2>/dev/null || true
-		trap - HUP INT TERM
-		position="${reply##*\[}"
-		row="${position%%;*}"
-		case "$row" in
-			''|*[!0-9]*) ;;
-			*) [ "$row" -gt 0 ] && {
-				printf '%s' "$row"
-				return
-			} ;;
-		esac
-	fi
 
-	set -- $(stty size 2>/dev/null || true)
-	row="${1:-0}"
-	case "$row" in ''|*[!0-9]*) row=0 ;; esac
-	[ "$row" -ne 0 ] || row=24
-	printf '%s' "$row"
-}
+class Skipped(Exception):
+    pass
 
-tui_start()
-{
-	[ -t 1 ] || return 0
-	[ "$#" -eq 1 ] || s_peer=SKIP
-	tui_rows="$(terminal_rows)"
-	[ "$tui_rows" -ge 14 ] || return 0
-	tui_top=$((tui_rows - 8))
-	tui=1
-	printf '\033[1;%dr\033[%d;1H' "$((tui_top - 1))" "$((tui_top - 1))"
-	trap tui_stop 0
-	trap 'exit 129' HUP
-	trap 'exit 130' INT
-	trap 'exit 143' TERM
-	tui_render
-}
 
-info()
-{
-	printf '%sGrid PLC: %s%s\n' "$cyan" "$*" "$reset"
-}
+def info(msg):
+    print(f"{CYAN}Grid PLC: {msg}{RESET}", flush=True)
 
-pass()
-{
-	printf '%sGrid PLC: PASS - %s%s\n' "$green" "$*" "$reset"
-}
 
-fail()
-{
-	set_status "$current_step" FAIL
-	printf '%sGrid PLC: FAIL - %s%s\n' "$red" "$*" "$reset" >&2
-	[ -z "$iface" ] || {
-		ethtool -S "$iface" >&2 || true
-	}
-	dmesg | grep -Ei 'qca|spi0\.0|ecspi' | tail -n 20 >&2 || true
-	exit 1
-}
+def passed(msg):
+    print(f"{GREEN}Grid PLC: PASS - {msg}{RESET}", flush=True)
 
-tui_start "$@"
 
-if [ "${1:-}" = --tui-test ]; then
-	[ "$tui" -eq 1 ] || fail "TUI test requires a terminal"
-	set_status spi PASS
-	set_status sync PASS
-	set_status identity FAIL
-	set_status peer SKIP
-	exit 0
-fi
+class StatusPanel:
+    """Fixed status box at the bottom of the terminal; logs scroll above it."""
 
-info "checking ECSPI1, qcaspi, and the QCA7005"
-[ -d "$spi" ] || fail "ECSPI1 device spi0.0 is absent"
+    WIDTH = 49
 
-if [ ! -L "$spi/driver" ]; then
-	info "loading the qcaspi driver"
-	modprobe qcaspi || fail "cannot load qcaspi"
-	seconds=0
-	while [ ! -L "$spi/driver" ] && [ "$seconds" -lt 5 ]; do
-		sleep 1
-		seconds=$((seconds + 1))
-	done
-fi
-[ -L "$spi/driver" ] || fail "qcaspi did not bind to spi0.0"
+    def __init__(self):
+        self.status = {key: "PENDING" for key, _ in STEPS}
+        self.active = False
+        self.top = 0
+        self.rows = 0
 
-driver="$(basename "$(readlink -f "$spi/driver")")"
-[ "$driver" = qcaspi ] || fail "spi0.0 is bound to $driver, not qcaspi"
+    def start(self):
+        if not sys.stdout.isatty():
+            return
+        self.rows = terminal_rows()
+        if self.rows < 14:
+            return
+        self.top = self.rows - len(STEPS) - 1
+        self.active = True
+        sys.stdout.write(f"\033[1;{self.top - 1}r\033[{self.top - 1};1H")
+        self.render()
 
-for netdev in "$spi"/net/*; do
-	[ -d "$netdev" ] || continue
-	iface="${netdev##*/}"
-	break
-done
-[ -n "$iface" ] || fail "qcaspi created no network interface"
-set_status spi PASS
+    def stop(self):
+        if not self.active:
+            return
+        self.render()
+        sys.stdout.write(f"\033[r\033[{self.rows};1H\n")
+        sys.stdout.flush()
+        self.active = False
 
-set_status sync PENDING
-ip link set dev "$iface" up || fail "cannot bring up $iface"
-seconds=0
-if [ "$(cat "/sys/class/net/$iface/carrier")" != 1 ]; then
-	info "waiting up to 15 seconds for SPI synchronization"
-fi
-while [ "$(cat "/sys/class/net/$iface/carrier")" != 1 ] &&
-	[ "$seconds" -lt 15 ]; do
-	printf '\r%sGrid PLC: synchronization wait %2d/15 seconds%s' \
-		"$cyan" "$seconds" "$reset"
-	sleep 1
-	seconds=$((seconds + 1))
-done
-[ "$seconds" -eq 0 ] || printf '\r%sGrid PLC: synchronization wait %2d/15 seconds%s\n' \
-	"$cyan" "$seconds" "$reset"
-[ "$(cat "/sys/class/net/$iface/carrier")" = 1 ] ||
-	fail "QCA7005 did not synchronize over SPI within 15 seconds"
-set_status sync PASS
+    def set(self, key, state):
+        self.status[key] = state
+        self.render()
 
-pass "QCA7005 is present and synchronized"
-echo "SPI device: spi0.0"
-echo "Driver:     $driver"
-echo "Interface:  $iface"
-ethtool -i "$iface" || true
-ethtool -S "$iface" || true
+    def render(self):
+        if not self.active:
+            return
+        badge = {
+            "PASS": f"{GREEN}[PASS]{RESET}",
+            "FAIL": f"{RED}[FAIL]{RESET}",
+            "SKIP": f"{CYAN}[SKIP]{RESET}",
+        }
+        title = " Grid PLC verification "
+        out = ["\0337", f"\033[{self.top};1H\033[2K{CYAN}+"
+               f"{title}{'-' * (self.WIDTH - len(title) - 2)}+{RESET}"]
+        for i, (key, label) in enumerate(STEPS, 1):
+            state = badge.get(self.status[key], f"{GRAY}------{RESET}")
+            out.append(f"\033[{self.top + i};1H\033[2K| {state} {label:<38} |")
+        out.append(f"\033[{self.top + len(STEPS) + 1};1H\033[2K+"
+                   f"{'-' * (self.WIDTH - 2)}+\0338")
+        sys.stdout.write("".join(out))
+        sys.stdout.flush()
 
-set_status identity PENDING
-command -v plctool >/dev/null || fail "plctool is not installed"
-info "reading QCA7005 identity, link, and network membership"
-plctool -i "$iface" -r -L -m || fail "QCA7005 management query failed"
-set_status identity PASS
 
-set_status remote PENDING
-command -v plcstat >/dev/null || fail "plcstat is not installed"
-info "checking for a remote Grid PLC station"
-if ! topology="$(plcstat -i "$iface" -t 2>&1)"; then
-	printf '%s\n' "$topology" >&2
-	fail "PLC topology query failed"
-fi
-printf '%s\n' "$topology"
-printf '%s\n' "$topology" | grep -q '^ LOC' ||
-	fail "local QCA7005 did not answer the topology query"
-printf '%s\n' "$topology" | grep -q '^ REM' ||
-	fail "no remote Grid PLC station is associated"
-set_status remote PASS
+def terminal_rows():
+    """Serial consoles report 0x0, so fall back to asking the terminal."""
+    env = os.environ.get("PLC_TUI_ROWS", "")
+    if env.isdigit() and int(env) > 0:
+        return int(env)
+    try:
+        rows = os.get_terminal_size(sys.stdout.fileno()).lines
+        if rows > 0:
+            return rows
+    except OSError:
+        pass
+    try:
+        with open("/dev/tty", "r+b", buffering=0) as tty:
+            saved = termios.tcgetattr(tty)
+            new = termios.tcgetattr(tty)
+            new[3] &= ~(termios.ECHO | termios.ICANON)
+            try:
+                termios.tcsetattr(tty, termios.TCSANOW, new)
+                tty.write(b"\0337\033[999;999H\033[6n\0338")
+                reply = b""
+                while select.select([tty], [], [], 0.3)[0]:
+                    reply += tty.read(32)
+                    if reply.endswith(b"R"):
+                        break
+            finally:
+                termios.tcsetattr(tty, termios.TCSANOW, saved)
+        match = re.search(rb"\[(\d+);\d+R", reply)
+        if match:
+            return int(match.group(1))
+    except OSError:
+        pass
+    return 24
 
-set_status rates PENDING
-command -v plcrate >/dev/null || fail "plcrate is not installed"
-info "checking three PLC PHY-rate samples"
-plcrate -i "$iface" -l 3 -w 1 -x || fail "PLC PHY rate is zero or unavailable"
-set_status rates PASS
-pass "local and remote PLC stations are communicating"
 
-set_status ipv4 PENDING
-if ifconfig "$iface" | grep -q 'inet '; then
-	command -v arp-scan >/dev/null || fail "arp-scan is not installed"
-	info "discovering IPv4 hosts on the PLC network"
-	arp-scan --interface="$iface" --localnet || fail "ARP discovery failed"
-	set_status ipv4 PASS
-	pass "ARP discovery completed"
-else
-	set_status ipv4 SKIP
-	info "no IPv4 address on $iface; skipping ARP discovery"
-	info "run udhcpc -i $iface -n -q, then run this check again"
-fi
+def run(cmd, timeout=30):
+    """Run a tool; return (exit code, combined output)."""
+    try:
+        res = subprocess.run(cmd, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True,
+                             timeout=timeout)
+    except FileNotFoundError:
+        raise CheckFailed(
+            f"{cmd[0]} is not installed",
+            "The image was built without the package that provides it.",
+            [f"enable the package providing {cmd[0]} in "
+             "friskenluften_iris_defconfig and rebuild"])
+    except subprocess.TimeoutExpired as exc:
+        out = exc.output or ""
+        if isinstance(out, bytes):
+            out = out.decode(errors="replace")
+        return 124, out + f"\n{cmd[0]}: timed out after {timeout} s\n"
+    return res.returncode, res.stdout
 
-if [ "$#" -eq 1 ]; then
-	set_status peer PENDING
-	info "pinging PLC peer $1"
-	ping -I "$iface" -c 3 -W 2 "$1" ||
-		fail "PLC peer $1 did not answer"
-	set_status peer PASS
-	pass "PLC network peer $1 is responding"
-fi
+
+def read_sysfs(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def qcaspi_counters(iface):
+    code, out = run(["ethtool", "-S", iface])
+    counters = {}
+    if code == 0:
+        for line in out.splitlines():
+            name, sep, value = line.rpartition(":")
+            if sep and value.strip().isdigit():
+                counters[name.strip()] = int(value)
+    return counters
+
+
+class GridCheck:
+    def __init__(self, panel, peer):
+        self.panel = panel
+        self.peer = peer
+        self.iface = None
+        self.step = "spi"
+
+    def begin(self, step):
+        self.step = step
+        self.panel.set(step, "PENDING")
+
+    # --- steps ---------------------------------------------------------
+
+    def check_spi(self):
+        info("checking ECSPI1, qcaspi, and the QCA7005")
+        if not os.path.isdir(SPI_DEV):
+            raise CheckFailed(
+                "ECSPI1 device spi0.0 is absent",
+                "The kernel did not create the SPI device for the QCA7005.",
+                ["confirm &ecspi1 and its qca,qca7000 child are enabled in "
+                 "the running DTB",
+                 "check that CONFIG_SPI_IMX is built in"])
+        driver_link = os.path.join(SPI_DEV, "driver")
+        if not os.path.islink(driver_link):
+            info("loading the qcaspi driver")
+            code, out = run(["modprobe", "qcaspi"])
+            if code != 0:
+                raise CheckFailed(
+                    "cannot load qcaspi",
+                    "The QCA7000 SPI driver module is missing or failed "
+                    "to load.",
+                    ["check CONFIG_QCA7000_SPI=m and that modules are "
+                     "installed"], out)
+            for _ in range(5):
+                if os.path.islink(driver_link):
+                    break
+                time.sleep(1)
+        if not os.path.islink(driver_link):
+            raise CheckFailed(
+                "qcaspi did not bind to spi0.0",
+                "The driver loaded but refused the device; its probe "
+                "failed.",
+                ["look for qcaspi probe errors in the dmesg lines below",
+                 "verify the interrupt (GPIO3_IO00) and SPI properties "
+                 "in the DT"])
+        driver = os.path.basename(os.path.realpath(driver_link))
+        if driver != "qcaspi":
+            raise CheckFailed(
+                f"spi0.0 is bound to {driver}, not qcaspi",
+                "Another driver claimed the SPI device.",
+                ["check the compatible string of the ECSPI1 child node"])
+        net_dir = os.path.join(SPI_DEV, "net")
+        ifaces = sorted(os.listdir(net_dir)) if os.path.isdir(net_dir) else []
+        if not ifaces:
+            raise CheckFailed(
+                "qcaspi created no network interface",
+                "The driver bound but did not register an Ethernet "
+                "device.",
+                ["check dmesg for register_netdev errors"])
+        self.iface = ifaces[0]
+
+    def check_sync(self):
+        iface = self.iface
+        code, out = run(["ip", "link", "set", "dev", iface, "up"])
+        if code != 0:
+            raise CheckFailed(f"cannot bring up {iface}", raw=out)
+        carrier = f"/sys/class/net/{iface}/carrier"
+        waited = 0
+        if read_sysfs(carrier) != "1":
+            info(f"waiting up to {SYNC_TIMEOUT} seconds for SPI "
+                 "synchronization")
+            while read_sysfs(carrier) != "1" and waited < SYNC_TIMEOUT:
+                print(f"\r{CYAN}Grid PLC: synchronization wait "
+                      f"{waited:2d}/{SYNC_TIMEOUT} seconds{RESET}",
+                      end="", flush=True)
+                time.sleep(1)
+                waited += 1
+            print(f"\r{CYAN}Grid PLC: synchronization wait "
+                  f"{waited:2d}/{SYNC_TIMEOUT} seconds{RESET}", flush=True)
+        if read_sysfs(carrier) != "1":
+            raise CheckFailed(
+                f"QCA7005 did not synchronize over SPI within "
+                f"{SYNC_TIMEOUT} seconds",
+                "The driver cannot read a valid signature from the chip, "
+                "so it never reports carrier.",
+                ["check QCA7005 power and that reset (GPIO3_IO01) is "
+                 "released",
+                 "check SPI wiring and chip select GPIO4_IO26",
+                 "see the nonzero counters below for the failure type"])
+        passed("QCA7005 is present and synchronized")
+        print(f"SPI device: spi0.0\nInterface:  {iface}")
+        print(run(["ethtool", "-i", iface])[1], end="")
+
+    def check_identity(self):
+        info("reading QCA7005 identity, link, and network membership")
+        code, out = run(["plctool", "-i", self.iface, "-r", "-L", "-m"])
+        print(out, end="")
+        if code != 0:
+            raise CheckFailed(
+                "QCA7005 management query failed",
+                "SPI works, but the chip did not answer HomePlug "
+                "management messages.",
+                ["check that the QCA7005 host interface is configured "
+                 "for SPI",
+                 "rerun after a reset: /etc/init.d/S09plc-grid-reset "
+                 "restart"])
+        if re.search(r"\bBootLoader\b", out):
+            raise CheckFailed(
+                "QCA7005 is running its ROM bootloader, not PLC firmware",
+                "The chip answered only as 'BootLoader': no PLC firmware "
+                "(.nvm) and parameter block (.pib) are running. The "
+                "bootloader handles basic version queries but has no "
+                "powerline stack, so it cannot join a network or answer "
+                "topology and rate queries.",
+                ["if the QCA7005 has its own SPI flash: it is blank or "
+                 "holds invalid firmware; program a QCA7005 .nvm and "
+                 "board .pib into it",
+                 "if it has no flash: the host must load them after every "
+                 "reset (open-plc-utils plcboot -i "
+                 f"{self.iface} -N <fw>.nvm -P <board>.pib)",
+                 "check the QCA7005 boot-strap pins against the schematic"])
+        version = [line.split(None, 2)[2] for line in out.splitlines()
+                   if len(line.split(None, 2)) == 3
+                   and not re.search(r"\b(Request|Fetch)\b", line)]
+        if version:
+            info(f"firmware: {version[0]}")
+
+    def check_remote(self):
+        info("checking for a remote Grid PLC station")
+        code, out = run(["plcstat", "-i", self.iface, "-t"])
+        print(out, end="")
+        if code != 0 or not re.search(r"^ LOC", out, re.M):
+            raise CheckFailed(
+                "local QCA7005 did not answer the topology query",
+                "The PLC firmware did not return network topology. This "
+                "normally means the firmware is not running or crashed.",
+                ["rerun after a reset: /etc/init.d/S09plc-grid-reset "
+                 "restart",
+                 "check dmesg below for qcaspi resets"])
+        if not re.search(r"^ REM", out, re.M):
+            raise CheckFailed(
+                "no remote Grid PLC station is associated",
+                "The local chip is running but has not joined a PLC "
+                "network with another station.",
+                ["check that the grid-side PLC modem is powered and "
+                 "coupled to the same line",
+                 "check that both stations use the same network "
+                 "membership key (NMK)",
+                 "check the coupling circuit between the QCA7005 and "
+                 "the line"])
+
+    def check_rates(self):
+        info("checking three PLC PHY-rate samples")
+        code, out = run(["plcrate", "-i", self.iface, "-l", "3", "-w", "1",
+                         "-x"])
+        print(out, end="")
+        if code != 0:
+            raise CheckFailed(
+                "PLC PHY rate is zero or unavailable",
+                "The stations are associated, but no usable data rate "
+                "was negotiated.",
+                ["check line coupling and noise on the PLC path",
+                 "check that the tone mask in both .pib files matches"])
+        passed("local and remote PLC stations are communicating")
+
+    def check_ipv4(self):
+        code, out = run(["ip", "-4", "addr", "show", "dev", self.iface])
+        if "inet " not in out:
+            info(f"no IPv4 address on {self.iface}; skipping ARP discovery")
+            info(f"run udhcpc -i {self.iface} -n -q, then run this check "
+                 "again")
+            raise Skipped()
+        info("discovering IPv4 hosts on the PLC network")
+        code, out = run(["arp-scan", f"--interface={self.iface}",
+                         "--localnet"], timeout=60)
+        print(out, end="")
+        if code != 0:
+            raise CheckFailed("ARP discovery failed", raw=out)
+        passed("ARP discovery completed")
+
+    def check_peer(self):
+        if self.peer is None:
+            raise Skipped()
+        info(f"pinging PLC peer {self.peer}")
+        code, out = run(["ping", "-I", self.iface, "-c", "3", "-W", "2",
+                         self.peer])
+        print(out, end="")
+        if code != 0:
+            raise CheckFailed(
+                f"PLC peer {self.peer} did not answer",
+                "The PLC link is up, but IP traffic to the peer failed.",
+                ["check that the peer is on the same subnet and "
+                 "answers ICMP"])
+        passed(f"PLC network peer {self.peer} is responding")
+
+    # --- driver --------------------------------------------------------
+
+    def run_all(self):
+        for key, _ in STEPS:
+            self.begin(key)
+            try:
+                getattr(self, f"check_{key}")()
+            except Skipped:
+                self.panel.set(key, "SKIP")
+                continue
+            self.panel.set(key, "PASS")
+
+    def report(self, err):
+        self.panel.set(self.step, "FAIL")
+        label = dict(STEPS)[self.step]
+        e = sys.stderr
+        print(f"{RED}Grid PLC: FAIL - {err.summary}{RESET}", file=e)
+        print(f"  Step:    {label}", file=e)
+        if err.meaning:
+            print(f"  Meaning: {err.meaning}", file=e)
+        for i, action in enumerate(err.actions):
+            print(f"  {'Check:' if i == 0 else '':<8} - {action}", file=e)
+        if err.raw.strip():
+            print("  Tool output:", file=e)
+            for line in err.raw.rstrip().splitlines():
+                print(f"    {line}", file=e)
+        if self.iface:
+            counters = qcaspi_counters(self.iface)
+            flagged = [(n, v) for n, v in counters.items()
+                       if v and n in COUNTER_HINTS]
+            resets = counters.get("Device resets", 0)
+            if resets > 1:
+                flagged.append(("Device resets",
+                                f"{resets} (1 at boot is normal; more means "
+                                "the chip is rebooting)"))
+            if flagged:
+                print(f"{YELLOW}  Nonzero qcaspi error counters:{RESET}",
+                      file=e)
+                for name, value in flagged:
+                    hint = COUNTER_HINTS.get(name, "")
+                    print(f"    {name}: {value}"
+                          + (f" - {hint}" if hint else ""), file=e)
+            elif counters:
+                print("  qcaspi error counters: all zero (SPI link is "
+                      "clean)", file=e)
+        code, out = run(["dmesg"])
+        lines = [line for line in out.splitlines()
+                 if re.search(r"qca|spi0\.0|ecspi", line, re.I)][-20:]
+        if lines:
+            print("  Recent kernel messages:", file=e)
+            for line in lines:
+                print(f"    {line}", file=e)
+        e.flush()
+
+
+def usage():
+    print(f"Usage: {os.path.basename(sys.argv[0])} [peer-IP|--tui-test]",
+          file=sys.stderr)
+    sys.exit(2)
+
+
+def main():
+    # Keep tool output ordered with stderr reports when piped or logged.
+    sys.stdout.reconfigure(line_buffering=True)
+    args = sys.argv[1:]
+    if len(args) > 1:
+        usage()
+    arg = args[0] if args else None
+    if arg and arg != "--tui-test" and arg.startswith("-"):
+        print("Peer IP must not begin with '-'.", file=sys.stderr)
+        sys.exit(2)
+
+    for sig in (signal.SIGHUP, signal.SIGTERM):
+        signal.signal(sig, lambda n, _f: sys.exit(128 + n))
+
+    panel = StatusPanel()
+    if arg is None:
+        panel.status["peer"] = "SKIP"
+    panel.start()
+    try:
+        if arg == "--tui-test":
+            if not panel.active:
+                print("Grid PLC: FAIL - TUI test requires a terminal",
+                      file=sys.stderr)
+                return 1
+            for key, state in (("spi", "PASS"), ("sync", "PASS"),
+                               ("identity", "FAIL"), ("peer", "SKIP")):
+                time.sleep(0.3)
+                panel.set(key, state)
+            return 0
+        check = GridCheck(panel, arg)
+        try:
+            check.run_all()
+        except CheckFailed as err:
+            check.report(err)
+            return 1
+        return 0
+    except KeyboardInterrupt:
+        return 130
+    finally:
+        panel.stop()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

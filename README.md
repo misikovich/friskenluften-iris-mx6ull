@@ -178,9 +178,9 @@ The installer uses the native Linux LED pattern trigger:
 | State                        | Pattern                                                                                     |
 | ---------------------------- | ------------------------------------------------------------------------------------------- |
 | Programming started          | Fast breathing with a 200 ms full-brightness plateau, approximately 0.8 seconds per cycle   |
-| Programming complete         | Ten flashes in one second, then slow breathing with a full-brightness plateau               |
+| Programming complete         | Ten flashes in one second, then the idle pulse                                              |
 | Programming failed           | Toggle every 250 ms forever                                                                 |
-| Normal programmed-board boot | Slow breathing with a 600 ms full-brightness plateau, approximately three seconds per cycle |
+| Normal programmed-board boot | Idle pulse: 100 ms rise to full brightness, then a 900 ms fade, once per second            |
 
 The implementation is in `board/friskenluften/iris/S99nand-install`. Kernel support is enabled by `CONFIG_LEDS_TRIGGER_PATTERN`.
 
@@ -306,7 +306,11 @@ plc-grid-check
 
 The command verifies the SPI driver and counters, reads the local QCA7005
 identity and membership, requires a remote PLC station with nonzero PHY rates,
-and runs ARP discovery when DHCP has supplied an IPv4 address. On a terminal,
+and runs ARP discovery when DHCP has supplied an IPv4 address. It is a
+Python 3 script; each failure prints the failed step, what it means, what to
+check, nonzero `qcaspi` error counters with explanations, and recent kernel
+messages. A QCA7005 that answers only as `BootLoader` is reported as missing
+PLC firmware. On a terminal,
 logs scroll above a fixed status panel. Preview it without hardware using
 `plc-grid-check --tui-test`. To also require a response from a known IP peer:
 
